@@ -22,7 +22,7 @@ mkdir -p "$WORK/obj"
 objs=()
 for src in src/reac_segconf.c src/reac_declared_vlan.c src/reac_box_pin.c src/reac_headamp_prop.c \
            src/reac_rate_cfg.c src/reac_role_cfg.c src/reac_qdisc.c src/reac_link_alias.c \
-           src/reac_served_mark.c fuzz/catalogue.c; do
+           src/reac_served_mark.c src/reac_knock_wire.c fuzz/catalogue.c; do
   extra=()
   case $src in
   src/reac_qdisc.c | src/reac_link_alias.c) extra=("${NET[@]}") ;;
@@ -33,8 +33,13 @@ for src in src/reac_segconf.c src/reac_declared_vlan.c src/reac_box_pin.c src/re
 done
 $AR rcs "$WORK/libreac-pw-readers.a" "${objs[@]}"
 
-# The fuzz targets.
+# The fuzz targets. src/reac_knock_wire.c is linked for its plan table alone, which
+# reac_segconf.c reads a `knock =` name through; the rest of it calls into the libreac library,
+# which no target links, and fuzz_segconf reaches none of those calls, so that link leaves them
+# unresolved (fuzz/build.sh does the same).
 for h in segconf pin headamp rate role qdisc link; do
+  ldx=()
+  [ "$h" = segconf ] && ldx=(-Wl,--unresolved-symbols=ignore-all)
   $CC $CFLAGS "${STD[@]}" "${INC[@]}" -c "fuzz/fuzz_$h.c" -o "$WORK/fuzz_$h.o"
-  $CC $CFLAGS "$WORK/fuzz_$h.o" -o "$OUT/fuzz_$h" $LIB_FUZZING_ENGINE "$WORK/libreac-pw-readers.a" -lm
+  $CC $CFLAGS "${ldx[@]}" "$WORK/fuzz_$h.o" -o "$OUT/fuzz_$h" $LIB_FUZZING_ENGINE "$WORK/libreac-pw-readers.a" -lm
 done
