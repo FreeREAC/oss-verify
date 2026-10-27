@@ -33,13 +33,35 @@ for src in src/reac_segconf.c src/reac_declared_vlan.c src/reac_box_pin.c src/re
 done
 $AR rcs "$WORK/libreac-pw-readers.a" "${objs[@]}"
 
-# The fuzz targets. src/reac_knock_wire.c is linked for its plan table alone, which
-# reac_segconf.c reads a `knock =` name through; the rest of it calls into the libreac library,
-# which no target links, and fuzz_segconf reaches none of those calls, so that link leaves them
-# unresolved (fuzz/build.sh does the same).
+# src/reac_knock_wire.c is linked for its plan table alone, which reac_segconf.c reads a
+# `knock =` name through. The rest of that file calls the libreac library and reac-pw's own
+# wake ladder, which no fuzz target compiles, and fuzz_segconf calls none of it. Each of
+# those calls is linked here as a stop that calls abort(), so every symbol of every target
+# resolves: a link that drops a real object says so, and a call that is one day reached
+# ends the run at the call instead of jumping to address 0.
+cat > "$WORK/knock_stubs.c" <<'EOF'
+#include <stdlib.h>
+#define STOP(name) void name(void); void name(void) { abort(); }
+STOP(reac_ctrl_parse)
+STOP(reac_downstream_build)
+STOP(reac_knock_heard)
+STOP(reac_knock_init)
+STOP(reac_knock_step)
+STOP(reac_master_init)
+STOP(reac_master_next)
+STOP(reac_master_stamp)
+STOP(reac_pace_code)
+STOP(reac_wake_init)
+STOP(reac_wake_reopen)
+STOP(reac_wake_step)
+EOF
+$CC $CFLAGS "${STD[@]}" -c "$WORK/knock_stubs.c" -o "$WORK/knock_stubs.o"
+
+# The fuzz targets.
 for h in segconf pin headamp rate role qdisc link; do
-  ldx=()
-  [ "$h" = segconf ] && ldx=(-Wl,--unresolved-symbols=ignore-all)
+  stubs=()
+  [ "$h" = segconf ] && stubs=("$WORK/knock_stubs.o")
   $CC $CFLAGS "${STD[@]}" "${INC[@]}" -c "fuzz/fuzz_$h.c" -o "$WORK/fuzz_$h.o"
-  $CC $CFLAGS "${ldx[@]}" "$WORK/fuzz_$h.o" -o "$OUT/fuzz_$h" $LIB_FUZZING_ENGINE "$WORK/libreac-pw-readers.a" -lm
+  $CC $CFLAGS "$WORK/fuzz_$h.o" -o "$OUT/fuzz_$h" $LIB_FUZZING_ENGINE "$WORK/libreac-pw-readers.a" \
+    "${stubs[@]}" -lm
 done
