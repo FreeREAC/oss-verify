@@ -102,6 +102,7 @@ class World:
             self.check(500 + i, name, run_id)
             self.run(run_id, path, event)
         self.artifacts[101] = record()
+        self.reviews = {101: {"F2": "pass", "F7": "pass", "A1": "fail"}}  # run -> verdicts.json
         self.files = [{"filename": "projects/plugin-hostd/project.yaml", "status": "added"},
                       {"filename": "projects/plugin-hostd/build.sh", "status": "added"}]
         self.pulls = [self.pull()]
@@ -145,6 +146,14 @@ class World:
             if rec is not None:
                 table[f"repos/{REPO}/actions/artifacts/{run_id * 10}/zip"] = \
                     rec if isinstance(rec, bytes) else zipped({"record.json": json.dumps(rec)})
+            review = self.reviews.get(run_id)
+            arts = [] if review is None else [{"id": run_id * 10 + 1, "name": dispatch.REVIEW_ARTIFACT,
+                                               "expired": False, "size_in_bytes": 300}]
+            table[f"repos/{REPO}/actions/runs/{run_id}/artifacts?name={dispatch.REVIEW_ARTIFACT}&per_page=100"] = \
+                [{"artifacts": arts}]
+            if review is not None:
+                table[f"repos/{REPO}/actions/artifacts/{run_id * 10 + 1}/zip"] = review if isinstance(review, bytes) \
+                    else zipped({"comment.md": "x", "verdicts.json": json.dumps(review)})
         return FakeApi(table)
 
     def decide(self, event="pull_request_target", run_id=104, sha=SHA):
@@ -306,6 +315,7 @@ class ThePullRequest(unittest.TestCase):
         world.run(105, ".github/workflows/build.yaml", "pull_request_target")
         world.check(700, "project-builds", 105)
         world.artifacts[105] = record()
+        world.reviews[105] = world.reviews[101]
         got = world.decide(run_id=105)
         self.assertEqual((got["decision"], got["pr"], got["sha"]), ("dispatch", "32", SHA), got["reason"])
 
@@ -392,7 +402,14 @@ class ByHand(unittest.TestCase):
         world.run(HAND_RUN, run.get("path", ".github/workflows/build.yaml"), "workflow_dispatch", head_sha=MAIN,
                   branch=run.get("branch", "main"), head_repo=run.get("repo", REPO))
         world.artifacts[HAND_RUN] = record()
+        world.reviews[HAND_RUN] = world.reviews.pop(101)
         return world
+
+    def test_the_review_read_is_the_run_started_by_hand(self):
+        world = self.world()
+        world.reviews[HAND_RUN] = {"F2": "fail", "F7": "pass"}
+        got = world.decide(event="workflow_dispatch", run_id=HAND_RUN, sha=MAIN)
+        self.assertEqual((got["decision"], got["label"]), ("label", "review-blocking"), got["reason"])
 
     def test_a_build_by_hand_on_main_sends_the_pull_request_it_names(self):
         got = self.world().decide(event="workflow_dispatch", run_id=HAND_RUN, sha=MAIN)
@@ -471,6 +488,50 @@ class Labels(unittest.TestCase):
         self.assertEqual((got["decision"], got["label"], got["project"]), ("label", "name-review", name))
 
 
+class Review(unittest.TestCase):
+    """The review's verdicts in the Build run whose record names the commit: F2 or F7 fail labels review-blocking;
+    no verdicts, or F2 or F7 neither pass nor fail, labels review-pending. Any other check's verdict changes nothing."""
+
+    def decide(self, review):
+        world = World()
+        if review is None:
+            del world.reviews[101]
+        else:
+            world.reviews[101] = review
+        return world.decide()
+
+    def test_f2_or_f7_fail_labels_review_blocking(self):
+        for review in ({"F2": "fail", "F7": "pass"}, {"F2": "pass", "F7": "fail"}, {"F2": "fail", "F7": "person"}):
+            got = self.decide(review)
+            self.assertEqual((got["decision"], got["label"]), ("label", "review-blocking"), review)
+
+    def test_no_verdict_for_the_commit_labels_review_pending(self):
+        for review in (None, {"F2": "pass"}, {"F2": "pass", "F7": "person"}, {"F2": "Pass", "F7": "pass"},
+                       ["F2", "pass"], b"not a zip", zipped({"verdicts.json": "{"}),
+                       zipped({"comment.md": "x"}),
+                       zipped({"verdicts.json": '{"F2": "pass", "F7": "pass"}', "other": ""})):
+            got = self.decide(review)
+            self.assertEqual((got["decision"], got["label"]), ("label", "review-pending"), review)
+
+    def test_a_review_that_holds_comes_before_every_other_label(self):
+        world = World()
+        world.reviews[101] = {"F2": "fail", "F7": "pass"}
+        world.artifacts[101] = record(sizes=sizes(plain_text=2_000_000))
+        world.project_yaml = b"repo: https://example.invalid/x\nlanguage: go\n"
+        got = world.decide()
+        self.assertEqual((got["decision"], got["label"]), ("label", "review-blocking"), got["reason"])
+
+    def test_f2_and_f7_pass_send_whatever_the_other_checks_say(self):
+        got = self.decide({"F2": "pass", "F7": "pass", "A1": "fail", "G5": "person"})
+        self.assertEqual(got["decision"], "dispatch", got["reason"])
+
+    def test_the_build_workflow_uploads_the_verdicts_the_gate_reads(self):
+        text = (ROOT / ".github/workflows/build.yaml").read_text()
+        self.assertIn('jq .verdicts <<< "$out" > "$RUNNER_TEMP/draft/verdicts.json"', text)
+        self.assertIn(f"name: {dispatch.REVIEW_ARTIFACT}, path: \"${{{{ runner.temp }}}}/draft\"", text)
+        self.assertIn('"required":["F2","F7"]', text)
+
+
 class Maintainer(unittest.TestCase):
     """The author must be shown to maintain the repository `repo` names, by triage.py's maintainer check; anything
     else labels the pull request maintainer-review and sends nothing."""
@@ -544,8 +605,8 @@ class Maintainer(unittest.TestCase):
 
     def test_the_workflow_takes_the_label_and_takes_it_off_when_sent(self):
         text = (ROOT / ".github" / "workflows" / "enroll-dispatch.yml").read_text()
-        self.assertIn("label/maintainer-review)", text)
-        self.assertIn("size-review|language-paused|name-review|maintainer-review)", text)
+        self.assertIn("label/maintainer-review|label/review-blocking|label/review-pending)", text)
+        self.assertIn("size-review|language-paused|name-review|maintainer-review|review-blocking|review-pending)", text)
 
     def test_a_fork_does_not_pass_whoever_owns_it(self):
         fork = {"full_name": "someone/plugin-hostd", "owner": {"login": "someone"}, "fork": True,
