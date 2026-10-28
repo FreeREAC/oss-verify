@@ -24,7 +24,7 @@ Give each check one verdict:
 
 - **pass**: the evidence shows that the rule is met.
 - **fail**: the evidence shows that the rule is not met, and the maintainer can fix it. Each **fail** becomes one request in the comment.
-- **person**: Sami or Jason must decide, or you could not get the evidence. Each **person** goes in the summary only.
+- **person**: a person at Theorem must decide, or you could not get the evidence. Each **person** goes in the summary only.
 
 ## Checklist
 
@@ -145,15 +145,7 @@ Read each fuzz target's source: in `DIR`, or in the project's repository at the 
 
 ## Write the comment
 
-Write `$WORK/comment.md` in ASD-STE100: short sentences, active voice, one instruction in each sentence, no semicolons, simple tenses, the same word for the same thing. Put in it all and only what the maintainer needs:
-
-1. One sentence of thanks, with the project's name.
-2. If it helps, one or two sentences on what passed, for example "The build check passed: all four builds came out byte for byte the same twice."
-3. A note for each triage warning that they can ignore (G2).
-4. "<N> things before we merge:", then a numbered list with one item for each **fail**. Give the facts that the maintainer needs (the file, the line, the commit, the limit) and the fix. Link the rule, for example `docs/project-yaml.md#seed-corpora`. For a weak property, tell what the check misses, why it matters for a proof, and the check to write.
-5. The last step: "When it is ready, mark the pull request ready for review." for a draft. Else: "Push the changes to this pull request, and the checks run again."
-
-Do not put these in the comment: the size, the rubric, a **person** verdict, praise beyond one sentence, the verdict table, or a guess about whether we will accept the project. If no check is **fail**, write the thanks, what passed, and "We found nothing to change. A person at Theorem reviews the enrollment next."
+Write `$WORK/comment.md` as `.claude/skills/write-to-maintainer/SKILL.md` says. Its blocking items are the **fail** verdicts, each with the facts that the maintainer needs (the file, the line, the commit, the limit) and the fix. Do not put these in the comment: the size, the rubric, a **person** verdict, the verdict table, or a guess about whether we will accept the project.
 
 Post it only if the workflow sets `REVIEW_POST=1`: `gh pr comment "$PR" --body-file "$WORK/comment.md"`. Post it once. In CI, do not post: your last message is the comment ("In CI" in the skill).
 

@@ -7,8 +7,8 @@ description: Review an enrollment pull request on this repository, as the agent 
 
 This skill is for the agent that the enrollment check runs in CI on a pull request that adds or changes `projects/<name>/`: the review job of `.github/workflows/build.yaml`, after the build. A person at Theorem can also run it by hand. What the review checks, and how it writes the comment, is in `review.md` at the root of the repository: read it first, as `main` has it. This skill gives the inputs, the commands and the two outputs:
 
-1. **The comment**: one comment on the pull request, to the maintainer. It asks for each fix, and it thanks them.
-2. **The summary**: a report for Sami or Jason. It gives the facts, the verdict of each check and what a person must decide.
+1. **The comment**: one comment on the pull request, to the maintainer, written as `.claude/skills/write-to-maintainer/SKILL.md` says. It asks for each fix.
+2. **The summary**: a report for the people at Theorem who decide. It gives the facts, the verdict of each check and what a person must decide.
 
 The review decides nothing. We merge an enrollment when we intend to prove the project.
 
@@ -77,7 +77,7 @@ You run nothing, so `reproducer` and `observed` are often `not known`. The workf
 
 ## Write the summary
 
-Write `$WORK/summary.md` for Sami or Jason, in this form:
+Write `$WORK/summary.md` for the people at Theorem who decide, in this form:
 
 ```markdown
 # <name>: oss-verify pull request #<PR>, "<title>"

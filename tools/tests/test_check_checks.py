@@ -262,7 +262,7 @@ class ReviewComment(unittest.TestCase):
         # Its text may even start with a forged "Answered by" line (before the gate, the model could write one), with
         # or without a checks block, in either older layout: only metadata version 3 makes a review recorded.
         answered = review_comment.ANSWERED.format(ANSWERED_OK)
-        footer = review_comment.FOOTER.format(of='It is the review of `aaaaaaa`. ')
+        footer = review_comment.FOOTER.format(of=' of `aaaaaaa`')
         meta = review_comment.meta_line('a' * 40, 'review', 2)
         old = f"{review_comment.MARKER}\n{meta}\n\n{review_comment.HEADING}\n\n{footer}\n\nThanks.\n\n1. Fix X.\n"
         forged = f"{review_comment.MARKER}\n{meta}\n\n{review_comment.HEADING}\n\n{footer}\n\n{answered}\n\n1. Fix X.\n"
@@ -333,7 +333,7 @@ class ReviewComment(unittest.TestCase):
         self.assertIn("What answered it, as Claude Code reported it: `it asked for anthropic/claude-opus-5-5, which "
                       "the tool calls firstParty/claude-opus-5-5, but bedrock/claude-opus-5-5 (2 turns) answered",
                       notice)
-        self.assertTrue(notice.endswith("A person at Theorem reviews the enrollment."))
+        self.assertNotIn("person at Theorem", second)
         # The kept review keeps what answered it; a second keep writes the notice afresh, and nothing stacks.
         self.assertIn(f"<sub>Answered by `{ANSWERED_OK}`, as Claude Code reported it.</sub>", second)
         third = self.kept(second, "c" * 40)
@@ -357,7 +357,7 @@ class ReviewComment(unittest.TestCase):
     def test_the_commit_is_in_the_metadata_and_the_footer(self):
         text = self.comment("Thanks.\n", "### report\n", "--head", "abc1234" + "0" * 33)
         self.assertEqual(self.meta(text).group("head"), "abc1234" + "0" * 33)
-        self.assertIn("It is the review of `abc1234`.", text)
+        self.assertIn("Claude wrote this review of `abc1234` from", text)
 
     def test_a_review_that_did_not_finish_keeps_the_last_one_as_not_current(self):
         first = self.comment("Thanks.\n\n1. Fix X.\n", "### report\n", "--head", "a" * 40)
@@ -382,7 +382,7 @@ class ReviewComment(unittest.TestCase):
     def test_a_kept_comment_gets_its_footer_written_before_the_old_text(self):
         # The footer is written again above the kept comment, where nothing in the old text can hide it, and the old
         # comment's own footer, first as this script writes it, is not kept as well.
-        footer = review_comment.FOOTER.format(of=f"It is the review of `{'a' * 7}`. ")
+        footer = review_comment.FOOTER.format(of=f" of `{'a' * 7}`")
         first = self.comment("Thanks.\n\n1. Fix X.\n", "### report\n", "--head", "a" * 40)
         second = self.kept(first, "b" * 40)
         blocks = second.split("\n\n")
@@ -410,6 +410,16 @@ class ReviewComment(unittest.TestCase):
         self.assertIn(f"\n\n{forged}\n\n1. REAL_FINDING: fix X.", kept)
         self.assertEqual(self.kept(self.kept(kept, "c" * 40), "a" * 40).count("The review is cut at"), 1)
 
+    def test_a_kept_comment_carries_no_old_footer(self):
+        first = self.comment("Thanks.\n\n1. Fix X.\n", "### report\n", "--head", "a" * 40)
+        old = [review_comment.OLD_FOOTER.replace("{doc}", doc).replace("{of}", "It is the review of `aaaaaaa`. ")
+               for doc in ("review.md", ".claude/skills/review-enrollment/SKILL.md")]
+        kept = self.kept(first.replace(review_comment.FOOTER.format(of=" of `aaaaaaa`"), "\n\n".join(old)), "b" * 40)
+        self.assertNotIn("following", kept)
+        self.assertNotIn("person at Theorem", kept)
+        self.assertEqual(kept.count("Claude wrote this review"), 1)
+        self.assertIn("1. Fix X.", kept)
+
     def test_the_review_of_this_same_commit_is_kept_as_posted(self):
         # A rerun, or an edit of the pull request, that wrote no review for the commit already reviewed: the review is
         # still current, so it is not marked otherwise.
@@ -417,7 +427,7 @@ class ReviewComment(unittest.TestCase):
         self.assertEqual(self.kept(first, "a" * 40), first)
         # A comment of an older renderer (review first, footer last) names nothing that answered it: it is kept as
         # not current, with its text, and not sent back as the review.
-        footer = review_comment.FOOTER.format(of=f"It is the review of `{'a' * 7}`. ")
+        footer = review_comment.FOOTER.format(of=f" of `{'a' * 7}`")
         base = (f"{review_comment.MARKER}\n<!-- oss-verify-meta v=1 head={'a' * 40} status=review -->\n\n"
                 f"{review_comment.HEADING}\n\nThanks.\n\n{review_comment.CHECKS_SUMMARY}\n\n### report\n\n"
                 f"</details>\n\n{footer}\n")
@@ -438,7 +448,7 @@ class ReviewComment(unittest.TestCase):
         # the old text, and only one footer is taken off, the one in the place this script writes it: a review that
         # opens with the cut sentence (with a number too long to read, too) or with the footer is kept whole however
         # often it is kept, a keep for the same push gives the same comment, and keeping it never fails.
-        footer = review_comment.FOOTER.format(of=f"It is the review of `{'a' * 7}`. ")
+        footer = review_comment.FOOTER.format(of=f" of `{'a' * 7}`")
         for opening in (f"The review is cut at 7 characters: {review_comment.KEPT_WHERE}.",
                         f"The review is cut at 1{',111' * 1_500} characters: {review_comment.KEPT_WHERE}.",
                         f" The review is cut at 9 characters: {review_comment.KEPT_WHERE}.", footer,
@@ -1390,10 +1400,15 @@ class ReviewRun(unittest.TestCase):
             (bin / command).write_text(f"#!/bin/bash\nprintf '%s\\0' {command} \"$@\" >> {self.directory}/argv\n"
                                        f"exec {real} \"$@\"\n")
         (self.directory / "stream").write_text(stream({"type": "result", "is_error": False, "result": "Thanks."}))
+        for name in ("judge.md", "SKILL.md"):
+            skill = self.directory / ".claude" / "skills" / "write-to-maintainer" / name
+            skill.parent.mkdir(parents=True, exist_ok=True)
+            skill.write_text(f"the {name} text\n")
         # claude also keeps its conversation as the real one does, in $HOME/.claude/projects/<folder>/<id>.jsonl, and
         # refuses to resume one that is not there, or any one at all when the file fail-resume exists.
         (bin / "claude").write_text(
-            f"#!/bin/bash\nprintf '%s\\0' claude \"$@\" >> {self.directory}/argv\n"
+            f"#!/bin/bash\n{self.reader()}"
+            f"printf '%s\\0' claude \"$@\" >> {self.directory}/argv\n"
             f"{{ printf '%s\\0' \"$@\"; printf '\\0'; }} >> {self.directory}/calls\n"
             f"cat /proc/$$/environ > {self.directory}/environ\n"
             'id="" resume=""\n'
@@ -1433,7 +1448,7 @@ class ReviewRun(unittest.TestCase):
                 f'  [ "$(cat "$ANTHROPIC_IDENTITY_TOKEN_FILE")" != "$first" ] && break; sleep 0.1\n'
                 f'done\nread_token\n') if until_new else ""
         (self.directory / "bin" / "claude").write_text(
-            "#!/bin/bash\n"
+            f"#!/bin/bash\n{self.reader()}"
             f"cd {self.directory}\n"
             "n=$(( $(cat calls 2> /dev/null || echo 0) + 1 )); echo $n > calls\n"
             'read_token() { { cat "$ANTHROPIC_IDENTITY_TOKEN_FILE"; echo; } >> tokens; }\n'
@@ -1441,6 +1456,64 @@ class ReviewRun(unittest.TestCase):
             f"{poll}"
             '[ -f err.$n ] && cat err.$n >&2\n'
             'cat result.$n; exit "$(cat status.$n)"\n')
+
+    def reader(self):
+        """The reader call (the one with --no-session-persistence): it records its arguments, environment and identity
+        token, writes `reader-err` to its standard error, prints `reader-json` if it exists and else answers
+        `reader-answer` (by default pass), and exits with `reader-status` (by default 0)."""
+        return (f'if [[ " $* " == *" --no-session-persistence "* ]]; then\n'
+                f'  cd {self.directory}; printf "%s\\0" "$@" > reader-args; cat /proc/$$/environ > reader-environ\n'
+                '  cat "$ANTHROPIC_IDENTITY_TOKEN_FILE" > reader-token 2> /dev/null; cat reader-err >&2 2> /dev/null\n'
+                '  cat reader-json 2> /dev/null || python3 -c \'import json, sys; print(json.dumps({"is_error": False, '
+                '"result": sys.argv[1]}))\' "$(cat reader-answer 2> /dev/null || echo pass)"\n'
+                '  exit "$(cat reader-status 2> /dev/null || echo 0)"\nfi\n')
+
+    def test_the_reader_is_a_new_process_with_a_new_token_and_passes(self):
+        self.last_review()
+        out = self.run_review(**self.resume(**self.identity()))
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertIn("review-run: reader: pass", out.stdout)
+        self.assertEqual((self.directory / "review" / "comment.md").read_text(), "Thanks.\n")
+        args = (self.directory / "reader-args").read_text().split("\0")
+        self.assertNotIn("--resume", args)
+        self.assertEqual(args[args.index("--tools") + 1], "")
+        self.assertIn("BEGIN-", args[args.index("-p") + 1])
+        self.assertNotIn((self.directory / "reader-token").read_text().strip(), ("", "jwt-0"))
+        environ = (self.directory / "reader-environ").read_bytes().split(b"\0")
+        self.assertEqual({entry.split(b"=", 1)[0] for entry in environ if entry},
+                         {b"PATH", b"HOME", b"LANG", b"ANTHROPIC_API_KEY", b"CLAUDE_CODE_MAX_OUTPUT_TOKENS",
+                          b"ANTHROPIC_IDENTITY_TOKEN_FILE"})
+
+    def test_a_reader_answer_other_than_pass_keeps_the_comment_unposted(self):
+        regex = re.search(r"failure=\$\(grep -m1 -xE '([^']+)' \.review/failure\.txt",
+                          (ROOT / ".github" / "workflows" / "build.yaml").read_text()).group(1)
+        for answer, failure in (("fail 3: READER_WORDS", "the comment failed the reader check (rule 3)\n"),
+                                ("READER_WORDS", "the comment failed the reader check\n")):
+            (self.directory / "reader-answer").write_text(answer)
+            out = self.run_review()
+            self.assertEqual(out.returncode, 1, out.stderr)
+            self.assertEqual(self.failure()[0], failure)
+            self.assertRegex(failure.strip(), f"^{regex}$")
+            self.assertNotIn("READER_WORDS", out.stdout + out.stderr)
+            self.assertNotIn("Thanks.", out.stdout + out.stderr)
+            self.assertFalse((self.directory / "review" / "comment.md").exists())
+
+    def test_a_reader_that_did_not_run_says_so(self):
+        key = "sk-ant-api03-notasecretnotasecret"
+        for files, failure, shown in (({"reader-status": "2", "reader-err": "READER_BROKE"}, "exit 2", True),
+                                      ({"reader-json": '{"is_error": true, "result": "Invalid API key"}'}, "exit 0",
+                                       False),
+                                      ({"reader-status": "1", "reader-err": f"READER_BROKE {key}"}, "exit 1", False)):
+            for name in ("reader-status", "reader-err", "reader-json"):
+                (self.directory / name).unlink(missing_ok=True)
+            for name, text in files.items():
+                (self.directory / name).write_text(text)
+            out = self.run_review()
+            self.assertEqual(out.returncode, 1, out.stderr)
+            self.assertEqual(self.failure()[0], f"the reader did not run ({failure})\n")
+            self.assertEqual("READER_BROKE" in out.stderr, shown)
+            self.assertNotIn(key, out.stdout + out.stderr)
+            self.assertFalse((self.directory / "review" / "comment.md").exists())
 
     def identity(self, **environment):
         """The review step's environment for workload identity: the token file the step before wrote, and the URL and
@@ -1898,7 +1971,7 @@ class ReviewRun(unittest.TestCase):
         out = self.run_review(**self.identity(RUNNER_TEMP=str(temp)))
         self.assertEqual(out.returncode, 0, out.stderr)
         argv = (self.directory / "argv").read_text().split("\0")
-        claude = argv[len(argv) - 1 - argv[::-1].index("claude"):]
+        claude = argv[argv.index("claude", argv.index("--restricted") - 6):]
         at = claude.index("--disallowedTools")
         rules = [f"{tool}(/{directory}/**)" for directory in (temp, self.directory / "oidc")
                  for tool in ("Read", "Grep", "Glob")]
@@ -1922,7 +1995,7 @@ class ReviewRun(unittest.TestCase):
                          "asked anthropic/claude-opus-5-5\nendpoint api.anthropic.com\n"
                          "usage firstParty/claude-opus-5-5\nfirstParty/claude-opus-5-5 1\n")
         argv = (self.directory / "argv").read_text().split("\0")
-        claude = argv[len(argv) - 1 - argv[::-1].index("claude"):]
+        claude = argv[argv.index("claude", argv.index("--restricted") - 6):]
         self.assertEqual(claude[claude.index("--output-format") + 1], "stream-json")
         self.assertIn("--verbose", claude)
 
@@ -2517,7 +2590,7 @@ class SinceLastReview(unittest.TestCase):
 
 class ReviewSessionStore(unittest.TestCase):
     """build.yaml keeps the review's session in the Actions cache: the review job reads it, the keep job alone writes
-    it, and only review.md has an owner in CODEOWNERS."""
+    it, and only review.md, the write-to-maintainer skill and CODEOWNERS have an owner."""
 
     def setUp(self):
         self.workflow = yaml.safe_load((ROOT / ".github" / "workflows" / "build.yaml").read_text())
@@ -2548,12 +2621,14 @@ class ReviewSessionStore(unittest.TestCase):
         self.assertNotIn("REVIEW_CONVERSATION_KEY", text)
         self.assertFalse((ROOT / ".github" / "scripts" / "review-session").exists())
 
-    def test_review_md_and_codeowners_are_the_only_files_with_an_owner_and_the_last_patterns(self):
+    def test_only_review_md_the_skill_and_codeowners_have_an_owner_and_are_the_last_patterns(self):
         lines = [line.split() for line in (ROOT / ".github" / "CODEOWNERS").read_text().splitlines()
                  if line.strip() and not line.lstrip().startswith("#")]
-        owned = [["/review.md", "@theorem-labs/engineering"], ["/.github/CODEOWNERS", "@theorem-labs/engineering"]]
+        owned = [["/review.md", "@theorem-labs/engineering"],
+                 ["/.claude/skills/write-to-maintainer/", "@theorem-labs/engineering"],
+                 ["/.github/CODEOWNERS", "@theorem-labs/engineering"]]
         self.assertEqual([line for line in lines if len(line) > 1], owned)
-        self.assertEqual(lines[-2:], owned)
+        self.assertEqual(lines[-3:], owned)
         self.assertTrue((ROOT / "review.md").is_file())
 
 
