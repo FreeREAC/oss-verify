@@ -11,6 +11,11 @@ on:
         description: "Branch or commit of this repository to check out"
         required: true
         type: string
+      mode:
+        description: "twice: check --twice; checks: check --checks; both: one after the other"
+        type: choice
+        options: [both, twice, checks]
+        default: both
 
 permissions:
   contents: read
@@ -18,22 +23,48 @@ permissions:
 jobs:
   check:
     runs-on: ubuntu-latest
-    timeout-minutes: 300
+    timeout-minutes: 340
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ inputs.ref }}
           persist-credentials: false
       - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
-      - name: Check
+      - name: Check twice
+        if: inputs.mode != 'checks'
         env:
           PROJECT: ${{ inputs.project }}
         run: |
           set -o pipefail
-          git rev-parse HEAD | tee check.log
-          uv run oss-verify check --no-shell --twice "$PROJECT" 2>&1 | tee -a check.log
+          git rev-parse HEAD | tee twice.log
+          uv run oss-verify check --no-shell --twice "$PROJECT" 2>&1 | tee -a twice.log
+      # qemu-riscv64-static for --checks, taken out of its package exactly as upstream's build.yaml does.
+      - name: Get qemu-riscv64-static
+        if: always() && inputs.mode != 'twice'
+        run: |
+          mkdir "$RUNNER_TEMP/qemu" && cd "$RUNNER_TEMP/qemu"
+          deb=qemu-user_10.0.11+ds-0+deb13u1_amd64.deb
+          curl -fsSL --retry 3 -o "$deb" https://snapshot.debian.org/file/a0eaa62f815efb2361d43b1e3f8011c17ad9123a
+          echo "6b6fea55551fbcc1eb30e146ad5abdfbb49f8fa8c5998016242126de4d7f80df  $deb" | sha256sum -c --quiet
+          dpkg-deb -x "$deb" .
+          ln -s qemu-riscv64 usr/bin/qemu-riscv64-static
+          usr/bin/qemu-riscv64-static --version | grep 'version 10\.0\.11'
+          echo "$RUNNER_TEMP/qemu/usr/bin" >> "$GITHUB_PATH"
+      - name: Check the checks
+        if: always() && inputs.mode != 'twice'
+        env:
+          PROJECT: ${{ inputs.project }}
+        run: |
+          set -o pipefail
+          git rev-parse HEAD | tee checks.log
+          uv run oss-verify check --no-shell --checks checks.md "$PROJECT" 2>&1 | tee -a checks.log
+          cat checks.md >> "$GITHUB_STEP_SUMMARY"
       - if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: check-log-${{ inputs.project }}
-          path: check.log
+          path: |
+            twice.log
+            checks.log
+            checks.md
+          if-no-files-found: ignore
